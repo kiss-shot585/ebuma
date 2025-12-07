@@ -1,15 +1,614 @@
 <!DOCTYPE html>
-<html lang="en">
-    <head>
-        <meta charset="UTF-8" />
-        <title>Title</title>
-        <link rel="stylesheet" href="styles.css" />
-        <script src="script.js"></script>
-    </head>
-    <body>
-        <h1 class="title">Hello World</h1>
-        <div id="mainDiv">Hello Div</div>
-        <br />
-        <button onclick="buttonClicked()">Click me</button>
-    </body>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title id="pageTitle">EBUMA | La Musique, La Vente, Votre Plateforme</title>
+    <!-- Chargement de Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Utilisation de la police Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --color-noir: #000000;
+            --color-or: #FFD700;
+            --color-blanc: #FFFFFF;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--color-noir);
+            color: var(--color-blanc);
+        }
+        
+        /* Styles personnalisés pour le Thème Or/Noir */
+        .btn-gold {
+            background-color: var(--color-or);
+            color: var(--color-noir);
+            transition: all 0.3s ease;
+        }
+        .btn-gold:hover {
+            background-color: #E5C100;
+            box-shadow: 0 4px 15px rgba(255, 215, 0, 0.4);
+        }
+        .text-gold { color: var(--color-or); }
+        .border-gold { border-color: var(--color-or); }
+
+        /* Carrousel */
+        .carousel-track {
+            display: flex;
+            overflow-x: scroll;
+            scroll-snap-type: x mandatory;
+            gap: 1.5rem;
+            padding-bottom: 1.5rem;
+            -webkit-overflow-scrolling: touch;
+        }
+        .carousel-track::-webkit-scrollbar { display: none; }
+        .carousel-track { -ms-overflow-style: none; scrollbar-width: none; }
+        .carousel-item {
+            flex: 0 0 200px; /* Taille fixe pour la vignette */
+            scroll-snap-align: start;
+        }
+        
+        /* Overlay de Restriction d'Accès */
+        .access-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.95);
+            transition: opacity 0.3s;
+            cursor: pointer;
+        }
+        .restricted .access-overlay {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .unrestricted .access-overlay {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        /* Style pour les statistiques (Compte Labels) */
+        .stat-card {
+            background-color: #1a1a1a;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            transition: transform 0.2s;
+            border: 1px solid #333;
+        }
+        .stat-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--color-or);
+        }
+    </style>
+</head>
+
+<body class="bg-black text-white">
+    
+    <!-- --- Configuration et Initialisation Firebase --- -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, setPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, query, limit, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables provided by the Canvas environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-ebuma-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        
+        let app, db, auth, userId = null;
+
+        // Global state object for easy access
+        window.authState = {
+            isAuthReady: false,
+            userType: null, // 'client', 'label', or null
+            userId: null,
+            db: null,
+            appId: appId
+        };
+        
+        // Log levels for debugging
+        setLogLevel('Debug');
+        
+        /**
+         * Initializes Firebase and authenticates the user.
+         */
+        async function initApp() {
+            try {
+                if (!firebaseConfig) {
+                    console.error("Firebase configuration not available.");
+                    return;
+                }
+                
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                window.authState.db = db;
+
+                // Set session persistence (user stays logged in during the session)
+                await setPersistence(auth, browserSessionPersistence);
+                
+                // 1. Authenticate the user
+                try {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } catch (e) {
+                    console.error("Authentication error, signing in anonymously as fallback:", e);
+                    await signInAnonymously(auth); // Fallback to anonymous sign-in
+                }
+                
+                // 2. Listen for auth state changes
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        window.authState.userId = userId;
+                        console.log("User authenticated:", userId);
+
+                        // Fetch user profile to determine type (Client or Label/Artist)
+                        const userRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
+                        const userSnap = await getDoc(userRef);
+                        
+                        if (userSnap.exists()) {
+                            window.authState.userType = userSnap.data().type;
+                            console.log("User Type:", window.authState.userType);
+                        } else {
+                            // First time sign-in, treat as an unregistered visitor until they choose an account type
+                            window.authState.userType = null; 
+                        }
+                    } else {
+                        userId = crypto.randomUUID(); // Anonymous ID if user is null
+                        window.authState.userId = userId;
+                        window.authState.userType = null;
+                        console.log("Anonymous session started:", userId);
+                    }
+                    
+                    window.authState.isAuthReady = true;
+                    // Update UI elements based on auth state
+                    window.updateUI();
+                });
+
+            } catch (error) {
+                console.error("Firebase initialization failed:", error);
+            }
+        }
+        
+        // Expose function globally for the HTML part to call
+        window.initApp = initApp;
+
+        // Fetch example data (simulated for the carousels)
+        window.fetchContent = () => {
+             if (!window.authState.isAuthReady) return;
+             console.log("Fetching content/Subscribing to updates...");
+             
+             // Simulation d'écoute en temps réel pour 'Actualités'
+             const newsRef = collection(window.authState.db, 'artifacts', window.authState.appId, 'public', 'data', 'news');
+             const q = query(newsRef, limit(3));
+             
+             // Utilisation de onSnapshot pour les mises à jour en temps réel
+             onSnapshot(q, (snapshot) => {
+                 const newsItems = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                 console.log("Actualités mises à jour (onSnapshot):", newsItems);
+                 // Ici, on mettrait à jour le DOM des Actualités
+             }, (error) => {
+                 console.error("Erreur lors de la récupération des actualités:", error);
+             });
+        };
+
+    </script>
+
+    <!-- --- EN-TÊTE / NAVIGATION (Noir & Or) --- -->
+    <header class="sticky top-0 bg-black shadow-xl z-50 border-b-2 border-yellow-500/80">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-20">
+                
+                <!-- Logo E.png Placeholder (Gold/Black theme) -->
+                <a href="#accueil" class="flex-shrink-0 flex items-center space-x-2 text-gold font-extrabold text-3xl">
+                    <!-- Logo E.png Placeholder (Gold/Black theme) -->
+                    <img src="https://placehold.co/100x40/000/FFD700?text=EBUMA" alt="Logo EBUMA UNLIMITED" class="h-8 w-auto">
+                </a>
+
+                <!-- Barre de Recherche (Moteur de recherche interne) -->
+                <div class="flex-1 max-w-lg mx-4 hidden md:block">
+                    <div class="relative">
+                        <input id="search-input" type="search" placeholder="Rechercher Single, Album, Artiste..." class="w-full py-2 pl-4 pr-10 rounded-full bg-gray-900 text-white border border-yellow-500/40 focus:ring-yellow-500 focus:border-yellow-500" />
+                        <button class="absolute right-0 top-0 mt-2 mr-3 text-gold hover:text-white transition duration-150">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Menu d'Action -->
+                <nav class="flex items-center space-x-3 sm:space-x-4">
+                    <!-- Choix de la Langue -->
+                    <select id="lang-toggle" onchange="window.toggleLanguage(this.value)" class="bg-black border border-gray-700 text-gold text-sm rounded-lg py-2 px-2 hover:border-yellow-500 transition duration-150 cursor-pointer">
+                        <option value="fr">🇫🇷 FR</option>
+                        <option value="en">🇬🇧 EN</option>
+                    </select>
+                    
+                    <!-- S'inscrire / Se connecter -->
+                    <button onclick="window.showAccessModal()" id="login-button" class="px-3 sm:px-4 py-2 rounded-full font-bold btn-gold text-sm sm:text-base">S'inscrire / Se connecter</button>
+                </nav>
+            </div>
+        </div>
+        
+        <!-- Menu Secondaire (Navigation Principale - Mobile friendly scroll) -->
+        <div class="bg-gray-900 border-t border-gray-800 overflow-x-auto whitespace-nowrap">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-6 py-2 text-sm font-medium">
+                <a href="#actualites" class="nav-link text-gray-300 hover:text-gold transition duration-150">Actualités</a>
+                <a href="#artist-label-space" id="artist-label-link" class="nav-link text-gold font-semibold transition duration-150">Labels & Artistes</a>
+                <a href="#singles" class="nav-link text-gray-300 hover:text-gold transition duration-150">Singles</a>
+                <a href="#albums" class="nav-link text-gray-300 hover:text-gold transition duration-150">Albums & E.P.</a>
+                <a href="#videos" class="nav-link text-gray-300 hover:text-gold transition duration-150">Clips Vidéos</a>
+                <a href="#playlists" class="nav-link text-gray-300 hover:text-gold transition duration-150">Playlists</a>
+                <a href="#collaborations" class="nav-link text-gray-300 hover:text-gold transition duration-150">Collaborations</a>
+                <a href="#chat" class="nav-link text-gray-300 hover:text-gold transition duration-150">Chat</a>
+                <a href="#favoris" class="nav-link text-gray-300 hover:text-gold transition duration-150">Favoris</a>
+            </div>
+        </div>
+    </header>
+
+    <!-- --- CONTENU PRINCIPAL --- -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" id="accueil">
+        
+        <!-- Section Héro / Vitrine -->
+        <section class="relative h-96 flex items-center justify-center bg-gray-900 overflow-hidden text-center rounded-xl shadow-2xl mb-12">
+            <div class="absolute inset-0 bg-cover bg-center opacity-30" style="background-image: url('https://placehold.co/1200x400/1C1C1C/FFD700?text=Musique+Locale+et+Internationale');"></div>
+            <div class="relative z-10 p-6 rounded-lg">
+                <h1 class="text-4xl sm:text-6xl font-black text-gold mb-4 tracking-tighter">
+                    EBUMA <span class="text-white">UNLIMITED</span>
+                </h1>
+                <p class="text-lg sm:text-xl text-gray-300 mb-8 max-w-2xl mx-auto">
+                    Le marché numérique de la musique, des clips et des documentaires.
+                </p>
+                <a href="#singles" class="px-8 py-3 rounded-full font-bold btn-gold shadow-lg">
+                    Découvrir la Boutique
+                </a>
+            </div>
+        </section>
+
+        <!-- DASHBOARDS (Visibilité conditionnelle basée sur le type de compte) -->
+        <section id="user-dashboard-area" class="mb-12 hidden">
+            <!-- Contenu mis à jour par JS -->
+        </section>
+
+
+        <!-- 🎧 SECTION : SINGLES (Carrousel Restreint) -->
+        <section class="py-6 restricted" id="singles">
+            <h2 class="text-3xl font-bold text-gold mb-6">💿 Nouveaux Singles</h2>
+            <div class="relative carousel-container">
+                <div class="carousel-track">
+                    <!-- Exemple de Contenu 1 -->
+                    <div class="carousel-item bg-gray-900 rounded-xl overflow-hidden shadow-xl relative" onclick="window.handleContentClick('single_1', 1.50)">
+                        <img src="https://placehold.co/200x200/222/FFD700?text=SINGLE+1" alt="Single 1" class="w-full h-auto object-cover">
+                        <div class="p-3">
+                            <h4 class="text-lg font-semibold text-white truncate">Titre du Single A</h4>
+                            <p class="text-sm text-gray-400">Artiste X - <span class="text-gold">1.50€</span></p>
+                        </div>
+                        <!-- Overlay de Restriction -->
+                        <div class="access-overlay flex flex-col justify-center items-center p-4" onclick="window.showAccessModal()">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 text-gold mb-2" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 12a2 2 0 100-4 2 2 0 000 4z" clip-rule="evenodd" /><path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd" /></svg>
+                            <p class="text-gold text-center font-bold mb-1 text-sm">Contenu Bloqué</p>
+                            <span class="text-xs text-white/80">Acheter / S'abonner</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Exemple de Contenu 2 (Album) -->
+                    <div class="carousel-item bg-gray-900 rounded-xl overflow-hidden shadow-xl relative" onclick="window.handleContentClick('album_1', 10.00)">
+                        <img src="https://placehold.co/200x200/333/FFD700?text=ALBUM+Y" alt="Album Y" class="w-full h-auto object-cover">
+                        <div class="p-3">
+                            <h4 class="text-lg font-semibold text-white truncate">Titre de l'Album</h4>
+                            <p class="text-sm text-gray-400">Label Prod - <span class="text-gold">10.00€</span></p>
+                        </div>
+                        <div class="access-overlay flex flex-col justify-center items-center p-4" onclick="window.showAccessModal()">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 text-gold mb-2" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 12a2 2 0 100-4 2 2 0 000 4z" clip-rule="evenodd" /><path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd" /></svg>
+                            <p class="text-gold text-center font-bold mb-1 text-sm">Contenu Bloqué</p>
+                            <span class="text-xs text-white/80">Acheter / S'abonner</span>
+                        </div>
+                    </div>
+
+                    <!-- Exemple de Contenu 3 (Clip Vidéo) -->
+                    <div class="carousel-item bg-gray-900 rounded-xl overflow-hidden shadow-xl relative" onclick="window.handleContentClick('video_1', 3.00)">
+                        <img src="https://placehold.co/200x200/444/FFD700?text=CLIP+Z" alt="Clip Z" class="w-full h-auto object-cover">
+                        <div class="p-3">
+                            <h4 class="text-lg font-semibold text-white truncate">Clip Vidéo (Cross Sell)</h4>
+                            <p class="text-sm text-gray-400">Artiste Z - <span class="text-gold">3.00€</span></p>
+                        </div>
+                        <div class="access-overlay flex flex-col justify-center items-center p-4" onclick="window.showAccessModal()">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 text-gold mb-2" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 12a2 2 0 100-4 2 2 0 000 4z" clip-rule="evenodd" /><path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd" /></svg>
+                            <p class="text-gold text-center font-bold mb-1 text-sm">Contenu Bloqué</p>
+                            <span class="text-xs text-white/80">Acheter / S'abonner</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Placeholder pour le défilement -->
+                    <div class="carousel-item bg-gray-900 rounded-xl flex items-center justify-center text-center p-4 border border-gray-700">
+                        <p class="text-gray-500 text-sm">Et bien plus... Connectez-vous pour tout voir.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- 🎤 SECTION : LABELS & ARTISTES (Vitrine) -->
+        <section class="py-12 border-t border-gray-800 mt-10" id="artist-label-space">
+            <h2 class="text-3xl font-bold text-gold mb-6">🏆 Espace Labels & Artistes</h2>
+            <div class="bg-gray-900 p-6 rounded-xl shadow-inner text-center">
+                <p class="text-lg text-gray-300 mb-4">
+                    Rejoignez la communauté EBUMA pour exposer, vendre et gérer vos projets.
+                </p>
+                <p class="text-sm text-gray-400 mb-6 font-semibold">
+                    **Commission EBUMA : 10 à 20%** sur chaque transaction, gérée automatiquement.
+                </p>
+                <div class="flex flex-col sm:flex-row justify-center space-y-4 sm:space-y-0 sm:space-x-4">
+                    <button onclick="window.showAccessModal()" class="px-6 py-3 border border-gold text-gold rounded-full font-semibold hover:bg-yellow-500 hover:text-black transition">
+                        Je suis Artiste/Label (S'inscrire)
+                    </button>
+                    <button onclick="window.simulateArtistList()" class="px-6 py-3 bg-gray-700 text-white rounded-full font-semibold hover:bg-gray-600 transition">
+                        Voir le Répertoire
+                    </button>
+                </div>
+            </div>
+        </section>
+
+    </main>
+    
+    <!-- --- MODAL/DIALOGUE (Inscription/Connexion) --- -->
+    <div id="accessModal" class="fixed inset-0 bg-black bg-opacity-80 z-[100] hidden flex items-center justify-center p-4 backdrop-blur-sm">
+        <div class="bg-gray-900 p-8 rounded-xl shadow-2xl max-w-lg w-full border border-gold">
+            <h3 class="text-3xl font-bold text-gold mb-4" id="modalTitle">Accès à EBUMA</h3>
+            <p class="text-white mb-6" id="modalMessage">
+                Veuillez choisir votre type de compte pour vous connecter ou vous inscrire.
+            </p>
+            
+            <p class="text-xs text-gray-400 mb-4 italic">
+                La connexion ou l'inscription vous donne un ID utilisateur : <span id="auth-id">Chargement...</span>
+            </p>
+
+            <div class="space-y-4">
+                <button onclick="window.selectAccount('client')" class="w-full py-3 bg-white text-black font-semibold rounded-lg hover:bg-gray-200 transition">
+                    Compte Client (Acheter, Liker, Chatter)
+                </button>
+                <button onclick="window.selectAccount('label')" class="w-full py-3 btn-gold font-semibold rounded-lg">
+                    Compte Labels & Artistes (Vendre, Upload, Stats)
+                </button>
+                <p class="text-center text-sm text-gray-500 pt-2">
+                    *Les achats sont possibles même sans compte (accès au contenu après paiement).
+                </p>
+                <button onclick="window.closeModal()" class="w-full py-2 text-gray-400 hover:text-white transition">
+                    Annuler / Retour
+                </button>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- --- FOOTER (Liens Légaux et Contact) --- -->
+    <footer class="bg-gray-900 border-t-2 border-yellow-500/50 py-6 text-sm">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+            
+            <!-- Liens Légaux -->
+            <div class="flex justify-center flex-wrap gap-x-6 gap-y-2 mb-4 text-gray-400">
+                <a href="#about" class="hover:text-gold transition">À propos de nous</a>
+                <a href="#mentions" class="hover:text-gold transition">Mentions Légales</a>
+                <a href="#politique" class="hover:text-gold transition">Politique & Confidentialité</a>
+                <a href="#cgu" class="hover:text-gold transition">Conditions d'utilisation</a>
+                <a href="#lyrics" class="hover:text-gold transition">Lyrics</a>
+                <a href="#collaborations" class="hover:text-gold transition">Collaborations</a>
+            </div>
+
+            <!-- Contact -->
+            <div class="mb-4 text-gray-300">
+                <p>Contact Pro: <a href="mailto:contact@ebuma.com" class="text-gold hover:underline">contact@ebuma.com</a></p>
+                <p>WhatsApp Pro: <a href="https://wa.me/XXXXXXXXXXX" class="text-gold hover:underline" target="_blank">+XXX XXX XXX XXX</a></p>
+            </div>
+
+            <p class="text-gray-500 mt-4">&copy; 2025 EBUMA UNLIMITED. Propulsé par la communauté.</p>
+        </div>
+    </footer>
+
+    <!-- --- LOGIQUE JAVASCRIPT --- -->
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // Initialisation de l'application Firebase
+            window.initApp(); 
+        });
+
+        // Dictionnaire des chaînes bilingues
+        const strings = {
+            fr: {
+                title: 'EBUMA | La Musique, La Vente, Votre Plateforme',
+                login: "S'inscrire / Se connecter",
+                dashboard_title: "Mon Espace Client",
+                dashboard_content: "Bienvenue dans votre espace sécurisé. Ici, vous pouvez voir votre historique d'achats, gérer vos Favoris et créer vos Playlists. Historique des transactions et Chat/Commentaires débloqués.",
+                label_dashboard_title: "Tableau de Bord Labels & Artistes",
+                label_dashboard_content: "Bienvenue, Artiste/Label ! Gérez vos Uploads, fixez les prix (avec option Farotage) et consultez vos Statistiques de Vente et de Téléchargement. Numéro OM/MM pour les gains : Non configuré."
+            },
+            en: {
+                title: 'EBUMA | Music, Sales, Your Platform',
+                login: "Sign Up / Log In",
+                dashboard_title: "My Client Area",
+                dashboard_content: "Welcome to your secure area. Here you can view your purchase history, manage your Favorites and create your Playlists. Transaction history and Chat/Comments unlocked.",
+                label_dashboard_title: "Labels & Artists Dashboard",
+                label_dashboard_content: "Welcome, Artist/Label! Manage your Uploads, set prices (with Farotage option) and check your Sales and Download Statistics. OM/MM number for earnings: Not configured."
+            }
+        };
+
+        let currentLang = 'fr';
+
+        // --- Fonctions Modales ---
+        window.showAccessModal = () => {
+            document.getElementById('auth-id').textContent = window.authState.userId || 'Guest ID';
+            const modal = document.getElementById('accessModal');
+            modal.classList.remove('hidden');
+        };
+
+        window.closeModal = () => {
+            const modal = document.getElementById('accessModal');
+            modal.classList.add('hidden');
+        };
+
+        // --- Logique d'Inscription/Connexion (simulée avec Firestore) ---
+        window.selectAccount = async (type) => {
+            if (!window.authState.db || !window.authState.userId) {
+                alert("Erreur: Firebase non initialisé. Veuillez réessayer.");
+                return;
+            }
+
+            const userRef = doc(window.authState.db, 'artifacts', window.authState.appId, 'users', window.authState.userId, 'profile', 'data');
+            
+            try {
+                // Stocker le type de compte dans Firestore
+                await setDoc(userRef, { 
+                    type: type, 
+                    created: new Date().toISOString(),
+                    // Simuler l'enregistrement des numéros OM/MM pour les labels
+                    mobileMoneyNumber: type === 'label' ? 'Non configuré' : null 
+                }, { merge: true });
+                
+                window.authState.userType = type; // Mise à jour de l'état local
+                console.log(`Compte ${type} sélectionné et enregistré.`);
+                window.updateUI(); // Mise à jour de l'interface
+                window.closeModal();
+
+                alert(`Connexion réussie en tant que: ${type === 'label' ? 'Label/Artiste' : 'Client'}. Votre tableau de bord est accessible !`);
+
+            } catch (error) {
+                console.error("Erreur lors de l'enregistrement du type de compte:", error);
+                alert("Erreur lors de l'enregistrement du compte. Consultez la console.");
+            }
+        };
+
+        // --- Logique d'Achat/Accès au Contenu (Simulée) ---
+        window.handleContentClick = (contentId, price) => {
+            // Un visiteur non connecté peut ACHETER directement
+            const isConnected = !!window.authState.userType;
+            
+            const action = isConnected 
+                ? `Paiement Mobile Money de ${price}€ initié pour le contenu ${contentId}.`
+                : `Achat direct (sans inscription) de ${price}€ initié pour le contenu ${contentId}. Vous aurez accès après paiement.`;
+
+            // Simuler l'achat
+            const farotage = prompt(`${action}\n\nSouhaitez-vous ajouter un bonus "Farotage" (montant en €) ? Entrez 0 pour ignorer.`);
+            
+            if (farotage !== null) {
+                const total = price + parseFloat(farotage || 0);
+                alert(`Transaction totale de ${total.toFixed(2)}€. Simulation de paiement via Orange Money/Mobile Money. Le contenu est débloqué.`);
+            }
+        };
+
+
+        // --- Construction des Tableaux de Bord ---
+        const getClientDashboardHTML = (lang) => `
+            <div class="bg-gray-900 p-6 sm:p-8 rounded-xl border border-white/10">
+                <h3 class="text-3xl font-bold text-white mb-4">${strings[lang].dashboard_title}</h3>
+                <p class="text-gray-400 mb-6">${strings[lang].dashboard_content}</p>
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <button class="py-3 bg-gray-800 text-gold rounded-lg hover:bg-gray-700 transition">Historique Achats</button>
+                    <button class="py-3 bg-gray-800 text-gold rounded-lg hover:bg-gray-700 transition">Gérer Favoris</button>
+                    <button class="py-3 bg-gray-800 text-gold rounded-lg hover:bg-gray-700 transition">Créer Playlist</button>
+                    <button class="py-3 bg-gray-800 text-gold rounded-lg hover:bg-gray-700 transition">Participer au Chat</button>
+                </div>
+            </div>
+        `;
+
+        const getLabelDashboardHTML = (lang) => `
+            <div class="bg-gray-900 p-6 sm:p-8 rounded-xl border border-gold/50 shadow-2xl">
+                <h3 class="text-3xl font-bold text-gold mb-6">${strings[lang].label_dashboard_title}</h3>
+                <p class="text-gray-400 mb-6">${strings[lang].label_dashboard_content}</p>
+                
+                <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+                    <div class="stat-card"><p class="text-sm text-gray-400">Ventes Nettes</p><p class="text-2xl font-bold text-gold">80.000€</p></div>
+                    <div class="stat-card"><p class="text-sm text-gray-400">Total Écoutes</p><p class="text-2xl font-bold text-white">1.2M</p></div>
+                    <div class="stat-card"><p class="text-sm text-gray-400">Vues Vidéo</p><p class="text-2xl font-bold text-white">450K</p></div>
+                    <div class="stat-card"><p class="text-sm text-gray-400">Revenus OM/MM</p><p class="text-2xl font-bold text-gold">78.000€</p></div>
+                </div>
+
+                <div class="flex flex-col sm:flex-row gap-4">
+                    <button class="w-full py-3 btn-gold font-semibold rounded-lg flex items-center justify-center">
+                        <svg class="h-5 w-5 mr-2" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clip-rule="evenodd"></path></svg>
+                        Upload Fichiers (Audio/Vidéo/Image/Texte)
+                    </button>
+                    <button class="w-full py-3 bg-gray-700 text-white font-semibold rounded-lg hover:bg-gray-600 transition">
+                        Suivi des Fichiers Postés
+                    </button>
+                </div>
+            </div>
+        `;
+
+
+        // --- Mise à Jour de l'Interface Utilisateur (Auth/Langue) ---
+        window.updateUI = () => {
+            const loginButton = document.getElementById('login-button');
+            const restrictedSections = document.querySelectorAll('.restricted');
+            const dashboardArea = document.getElementById('user-dashboard-area');
+            const langToggle = document.getElementById('lang-toggle');
+
+            // 1. Mise à jour de la langue (global et titre)
+            const lang = langToggle.value;
+            currentLang = lang;
+            document.getElementById('pageTitle').textContent = strings[lang].title;
+
+            // 2. Mise à jour de l'état de connexion et des contenus
+            if (window.authState.userType) {
+                // Utilisateur connecté (client ou label)
+                const userTypeDisplay = window.authState.userType === 'label' ? 'Label/Artiste' : 'Client';
+                loginButton.textContent = `${userTypeDisplay} (${window.authState.userId.substring(0, 4)}...)`;
+                loginButton.classList.remove('btn-gold');
+                loginButton.classList.add('bg-white', 'text-black', 'hover:bg-gray-200');
+                
+                // Afficher le Tableau de Bord
+                dashboardArea.classList.remove('hidden');
+                if (window.authState.userType === 'label') {
+                    dashboardArea.innerHTML = getLabelDashboardHTML(lang);
+                } else {
+                    dashboardArea.innerHTML = getClientDashboardHTML(lang);
+                }
+                
+                // Déverrouillage des contenus (pour les abonnés/connectés)
+                restrictedSections.forEach(section => {
+                    section.classList.remove('restricted');
+                    section.classList.add('unrestricted');
+                });
+                
+                // Fetch de données initiales après connexion
+                window.fetchContent();
+
+            } else {
+                // Utilisateur non connecté ou type non défini
+                loginButton.textContent = strings[lang].login;
+                loginButton.classList.remove('bg-white', 'text-black', 'hover:bg-gray-200');
+                loginButton.classList.add('btn-gold');
+
+                // Cacher le Tableau de Bord
+                dashboardArea.classList.add('hidden');
+                dashboardArea.innerHTML = '';
+
+                // Verrouillage des contenus
+                restrictedSections.forEach(section => {
+                    section.classList.remove('unrestricted');
+                    section.classList.add('restricted');
+                });
+            }
+        };
+        
+        // --- Bascule de Langue ---
+        window.toggleLanguage = (lang) => {
+            if (lang !== currentLang) {
+                currentLang = lang;
+                window.updateUI();
+            }
+        };
+
+        // Fonction de simulation pour la liste des artistes/labels
+        window.simulateArtistList = () => {
+            alert("Accès au Répertoire Labels & Artistes. Cette section est publique et permet de découvrir les créateurs.");
+        }
+
+    </script>
+</body>
 </html>
